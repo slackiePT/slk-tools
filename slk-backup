@@ -9,7 +9,7 @@
 # Author:
 #   	Rui 'slackie' Brito <fuzzerpt@gmail.com>
 #-----------------------------------------------------------------------------
-REV="v1.45 - last update 2014/10/06"
+REV="v0.34 - last update 2014/10/06"
 # ----------------------------------------------------------------------------
 # Configurable options
 # ----------------------------------------------------------------------------
@@ -23,7 +23,7 @@ SLK_TMP_DIR=${SLK_TMP_DIR:-${SLK_STORAGE_DIR}/_TMP}
 # MySQL configuration
 MYSQL_HOST=${MYSQL_HOST:-"127.0.0.1"}
 MYSQL_USER=${MYSQL_USER:-"root"}
-MYSQL_PASS=${MYSQL_PASS:-"merda123"}
+MYSQL_PASS=${MYSQL_PASS:-"<SOMEPASSWDHERE>"}
 
 VERBOSE=1
 SHOWHELP=0
