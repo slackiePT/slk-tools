@@ -1,0 +1,305 @@
+#!/bin/bash
+#
+#-----------------------------------------------------------------------------
+# Program name:
+#   	slk-backup
+# Purpose:
+#	Backup folders/files/databases.
+#	See output of slk-backup -h command.
+# Author:
+#   	Rui 'slackie' Brito <fuzzerpt@gmail.com>
+#-----------------------------------------------------------------------------
+REV="v1.45 - last update 2014/10/06"
+# ----------------------------------------------------------------------------
+# Configurable options
+# ----------------------------------------------------------------------------
+
+# This is the directory structure for the backups stuff
+SLK_STORAGE_DIR=${SLK_STORAGE_DIR:-/home/storage}
+SLK_BACKUPS_DIR=${SLK_BACKUPS_DIR:-${SLK_STORAGE_DIR}/_BACKUPS}
+SLK_BACKUPS_KEEP_DIR=${SLK_BACKUPS_KEEP_DIR:-${SLK_STORAGE_DIR}/_BACKUPS/__KEEP}
+SLK_TMP_DIR=${SLK_TMP_DIR:-${SLK_STORAGE_DIR}/_TMP}
+
+# MySQL configuration
+MYSQL_HOST=${MYSQL_HOST:-"127.0.0.1"}
+MYSQL_USER=${MYSQL_USER:-"root"}
+MYSQL_PASS=${MYSQL_PASS:-"merda123"}
+
+VERBOSE=1
+SHOWHELP=0
+DOBACKUP=0
+DODBBACKUP=0
+GROUPBACKUP=0
+
+# Some terminal colors to make it a bit more cute
+RED='\033[1m\E[31;40m'
+GREEN='\033[1m\E[32;40m'
+BLUE='\033[1m\E[34;40m'
+ORANGE='\033[1m\E[33;40m'
+PINK='\033[1m\E[35;40m'
+BOLD='\033[1m'
+EOC='\033[0m'
+
+# Default commands options
+TAR_OPTIONS="cvfP"
+MV_OPTIONS="-v"
+CP_OPTIONS="-vr"
+MKDIR_OPTIONS="-pv"
+RM_OPTIONS="-rv"
+
+# ----------------------------------------------------------------------------
+# Functions
+# ----------------------------------------------------------------------------
+
+function usage
+{
+	echo
+	echo -e "-------------------------------------------------------------------"
+	echo -e " $BOLD$0$EOC, $REV"
+	echo -e "-------------------------------------------------------------------"
+	echo -e "$BOLD USAGE:$EOC $0 [OPTIONS]"
+	echo
+	echo -e "$BOLD OPTIONS:$EOC"
+	echo -e "	$BOLD-h$EOC		This help"
+	echo -e "	$BOLD-b <target>$EOC	Backup given folder"
+	echo -e "	$BOLD-d <dbname>$EOC	Backup given database. Ensure you've dbuser and dbpasswd configured"
+	echo -e "	$BOLD-g <grpname>$EOC	Group given folders/files in same place at main backup directory"
+	echo -e "				Main backup directory: $BOLD$SLK_BACKUPS_DIR$EOC"
+	echo -e "	$BOLD-q$EOC		Non-verbose output (for cron jobs)."
+	echo
+	echo -e "$BOLD SETTINGS:$EOC"
+	echo -e "	$BOLD Backup DIR$EOC: $SLK_BACKUPS_DIR"
+	echo -e "	$BOLD Backup TMP$EOC: $SLK_TMP_DIR"
+	echo -e "	$BOLD MySQL HOST$EOC: $MYSQL_HOST"
+	echo -e "	$BOLD MySQL USER$EOC: $MYSQL_USER"
+	echo -e "-------------------------------------------------------------------"
+	echo
+	exit 1
+}
+
+function error
+{ 
+	echo -e "[$RED ERROR $EOC] ${1}"
+	exit 1
+}
+
+function warn
+{
+	if [ ${VERBOSE} -eq 1 ]; then
+		echo -e "[$ORANGE WARN $EOC] ${1}" 
+		sleep 2
+	fi
+}
+
+function step
+{
+	if [ ${VERBOSE} -eq 1 ]; then
+		echo -e "[$BLUE STEP $EOC] ${1}" 
+		sleep 1
+	fi
+}
+
+function completed
+{ 
+	if [ ${VERBOSE} -eq 1 ]; then
+		echo -e "[$GREEN DONE $EOC] ${1}" 
+		sleep 1
+	fi
+}
+
+function isRoot
+{
+	[ -x /bin/id ] && CMD_ID="/bin/id" || CMD_ID="/usr/bin/id"
+	if [ "$($CMD_ID -u)" != "0" ]; then
+		error "You need to be root to run this command."
+	fi
+}
+
+function inArray
+{
+	local haystack=${1}[@]
+	local needle=${2}
+
+	for i in ${!haystack}; do
+		if [[ ${i} == ${needle} ]]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+checkStructure()
+{
+	if [ ! -d $SLK_STORAGE_DIR ]; then
+		error "checkStructure(): $SLK_STORAGE_DIR not found"
+	fi
+	
+	if [ ! -w $SLK_STORAGE_DIR ]; then
+		error "checkStructure(): $SLK_STORAGE_DIR isn't writable"
+	fi
+	
+	if [ ! -d $SLK_BACKUPS_DIR ]; then
+		mkdir $MKDIR_OPTIONS $SLK_BACKUPS_DIR
+	fi
+	
+	if [ ! -d $SLK_TMP_DIR ]; then
+		mkdir $MKDIR_OPTIONS $SLK_TMP_DIR
+	fi
+	if [ ! -d $SLK_BACKUPS_KEEP_DIR ]; then
+		mkdir $MKDIR_OPTIONS $SLK_BACKUPS_KEEP_DIR
+	fi
+}
+
+# ----------------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------------
+
+while getopts b:d:g:hq OPTION; do
+	case "${OPTION}" in
+		b ) 
+			DOBACKUP=1
+			TARGETS+=("$OPTARG")
+			;;
+		d )
+			DODBBACKUP=1
+			DBS+=("$OPTARG")
+			;;
+		g )
+			GROUPBACKUP=1
+			GROUPBACKUPNAME="$OPTARG"
+			;;
+		h ) SHOWHELP=1 ;;
+		q ) VERBOSE=0 ;;
+		* ) usage ;;
+	esac
+done
+
+shift $(($OPTIND - 1))
+
+checkStructure
+
+[ $SHOWHELP -eq 1 ] && usage
+
+if [ $VERBOSE -eq 0 ]; then
+	TAR_OPTIONS="cfP"
+	MV_OPTIONS=""
+	CP_OPTIONS="-r"
+	MKDIR_OPTIONS="-p"
+	RM_OPTIONS="-r"
+fi
+
+if [ $DODBBACKUP -eq 1 ]; then
+	isRoot
+	if [ ! -f /var/run/mysql/mysql.pid ]; then
+		step "MySQL Server is not running. Lets start it."
+		chmod +x /etc/rc.d/rc.mysqld
+		/etc/rc.d/rc.mysqld start
+		sleep 2
+		chmod -x /etc/rc.d/rc.mysqld
+	fi
+	
+	# If "-g" is given then lets check if the directory already exist
+	# Otherwise lets create it
+	GRP_DIR_NAME="_MySQL"
+	if [ $GROUPBACKUP -eq 1 ]; then
+		GRP_DIR_NAME="$GROUPBACKUPNAME/_MySQL/"
+		if [ ! -d ${SLK_BACKUPS_DIR}/$GRP_DIR_NAME ]; then
+			mkdir $MKDIR_OPTIONS ${SLK_BACKUPS_DIR}/$GRP_DIR_NAME
+		fi
+	fi
+	
+	DATE=$(date +%Y%m%d)
+	
+	for db in "${DBS[@]}"; do
+		if inArray DBS $db; then
+			if mysqldump -h $MYSQL_HOST -u $MYSQL_USER -p$MYSQL_PASS ${db} --databases ${db} > $SLK_BACKUPS_DIR/$GRP_DIR_NAME/${db}-$DATE.sql; then
+				completed "Database $BOLD$db$EOC was successfully backed up"
+			fi
+		fi
+	done
+fi
+
+if [ $DOBACKUP -eq 1 ]; then
+	isRoot
+	
+	# Check if given folders/files exist
+	for i in "${TARGETS[@]}"; do
+		if [[ ! -d $i && ! -f $i ]]; then
+			error "$i do not exist."
+		fi
+	done
+	
+	# If "-g" is given then lets check if the directory already exist
+	# Otherwise lets create it
+	GRP_DIR_NAME=""
+	if [ $GROUPBACKUP -eq 1 ]; then
+		GRP_DIR_NAME="$GROUPBACKUPNAME/"
+		if [ ! -d ${SLK_BACKUPS_DIR}/$GRP_DIR_NAME ]; then
+			mkdir $MKDIR_OPTIONS ${SLK_BACKUPS_DIR}/$GRP_DIR_NAME
+		fi
+	fi
+	
+	for i in "${TARGETS[@]}"; do
+		
+		# Remove trailing slashes
+		i=$(echo $i | tr -s /); i=${i%/}
+		
+		FNAME_ORIG=$(echo $i | rev | cut -d'/' -f1 | rev)
+		BCK_DATE=$(date +%Y%m%d)
+		
+		if [[ "$FNAME_ORIG" =~ ^\. ]]; then
+			FNAME_MOD=$(echo "$FNAME_ORIG" | cut -c2-)
+			
+			if [ ! -d ${SLK_BACKUPS_DIR}/$GRP_DIR_NAME$FNAME_MOD ]; then
+				mkdir $MKDIR_OPTIONS ${SLK_BACKUPS_DIR}/$GRP_DIR_NAME$FNAME_MOD
+			fi
+		else
+			FNAME_MOD=$FNAME_ORIG
+			if [ ! -d ${SLK_BACKUPS_DIR}/$GRP_DIR_NAME$FNAME_MOD ]; then
+				mkdir $MKDIR_OPTIONS ${SLK_BACKUPS_DIR}/$GRP_DIR_NAME$FNAME_MOD
+			fi
+		fi
+		
+		if [ -d $i ]; then
+			warn "Compressing $i. This may take a while.."
+			
+			if [[ -f ${SLK_TMP_DIR}/$FNAME_MOD-$BCK_DATE.tar.bz2 ]]; then
+				warn "Backup - $FNAME_MOD-$BCK_DATE.tar.bz2 - already exist. Removing previous backup in 5 secs."
+				sleep 5
+				rm $RM_OPTIONS ${SLK_TMP_DIR}/$FNAME_MOD-$BCK_DATE.tar.bz2
+				completed "${SLK_TMP_DIR}/$FNAME_MOD-$BCK_DATE.tar.bz2 was successfully removed."
+			fi
+			
+			if [[ -f ${SLK_TMP_DIR}/$FNAME_MOD-$BCK_DATE.tar ]]; then
+				warn "Backup - $FNAME_MOD-$BCK_DATE.tar - already exist. Removing previous backup in 5 secs."
+				sleep 5
+				rm $RM_OPTIONS ${SLK_TMP_DIR}/$FNAME_MOD-$BCK_DATE.tar
+				completed "${SLK_TMP_DIR}/$FNAME_MOD-$BCK_DATE.tar was successfully removed."
+			fi
+			
+			if tar $TAR_OPTIONS ${SLK_TMP_DIR}/$FNAME_MOD-$BCK_DATE.tar -C $i . && bzip2 ${SLK_TMP_DIR}/$FNAME_MOD-$BCK_DATE.tar; then
+				if mv $MV_OPTIONS ${SLK_TMP_DIR}/$FNAME_MOD-$BCK_DATE.tar.bz2 ${SLK_BACKUPS_DIR}/$GRP_DIR_NAME$FNAME_MOD; then
+					completed "${SLK_BACKUPS_DIR}/$GRP_DIR_NAME$FNAME_MOD/$FNAME_MOD-$BCK_DATE.tar.bz2 was successfully created."
+				else
+					error "$0: while moving ${SLK_TMP_DIR}/$FNAME_MOD-$BCK_DATE.tar.bz2 to ${SLK_BACKUPS_DIR}/$GRP_DIR_NAME$FNAME_MOD/$FNAME_MOD-$BCK_DATE.tar.bz2"
+				fi
+			else
+				rm $RM_OPTIONS ${SLK_TMP_DIR}/*.tar
+				error "$0: while compressing $i as $FNAME_MOD-$BCK_DATE to ${SLK_TMP_DIR}"
+				
+			fi
+		elif [ -f $i ]; then
+			warn "Compressing $i. This may take a while.."
+			
+			if cp $i ${SLK_BACKUPS_DIR}/$GRP_DIR_NAME$FNAME_MOD/$FNAME_MOD-$BCK_DATE; then
+				completed "${SLK_BACKUPS_DIR}/$GRP_DIR_NAME$FNAME_MOD/$FNAME_MOD-$BCK_DATE was successfully created."
+			else
+				error "$0: while copying $i as $FNAME_MOD-$BCK_DATE to ${SLK_BACKUPS_DIR}/$GRP_DIR_NAME$FNAME_MOD/$FNAME_MOD-$BCK_DATE"
+			fi
+		else
+			error "$0: $i is not a directory or a regular file."
+		fi		
+	done
+fi
+
+exit 0
