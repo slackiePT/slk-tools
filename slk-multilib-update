@@ -1,0 +1,202 @@
+#!/bin/bash
+#
+#-----------------------------------------------------------------------------
+# Program name:
+#   	slk-multilib-update
+# Purpose:
+#	Check and install multilib packages from Alien Bob's repo.
+#	See output of slk-multilib-update -h command.
+# Author:
+#   	Rui 'slackie' Brito <fuzzerpt@gmail.com>
+#-----------------------------------------------------------------------------
+REV="v0.10 - last update 2014/06/06"
+# ----------------------------------------------------------------------------
+# Configurable options
+# ----------------------------------------------------------------------------
+
+# Where do we store the downloaded packages in our local filesystem?
+SLACKTREE=${SLACKTREE:-"/home/storage/_PACKAGES"}
+
+# The release we're getting the multilib packages for (override with "-r" option)
+# By default, use the version reported by '/etc/slackware-version':
+VERSION=$(cat /etc/slackware-version |cut -d' ' -f2 |cut -d. -f1-2)
+
+# By default packages not present at remote site are removed in our filesystem
+# If you want to keep packages not present at remote site use option "-k"
+DELETEFILES="--delete"
+
+# By default new packages present at remote site are installed in our system
+# If you don't want to install new packages use option "-s"
+# This option is only needed if you've selected option "-i" to install multilib packages
+INSTALLPKG=0
+SKIPNEWPKG=0
+SKIPNEWPKGOPT="--install-new"
+
+# This is our master server. I don't know other, so..
+# Thank you Eric Hameleers to make slacker's like easier :-P
+LFTPHOST=${LFTPHOST:-"http://slackware.com/~alien/multilib/"}
+
+# Chown downloaded packages to this user and group.
+USER="slackie"
+GROUP="users"
+
+# Some terminal colors to make it a bit more cute
+RED='\033[1m\E[31;40m'
+GREEN='\033[1m\E[32;40m'
+BLUE='\033[1m\E[34;40m'
+ORANGE='\033[1m\E[33;40m'
+PINK='\033[1m\E[35;40m'
+BOLD='\033[1m'
+EOC='\033[0m'
+
+# By default verbose is shown
+# Use option "-q" if you don't want to see verbose output.
+VERBOSE=1
+SHOWHELP=0
+
+# ----------------------------------------------------------------------------
+# Functions
+# ----------------------------------------------------------------------------
+
+function usage
+{
+	echo
+	echo -e "-------------------------------------------------------------------"
+	echo -e " $BOLD$0$EOC, $REV"
+	echo -e "-------------------------------------------------------------------"
+	echo -e "$BOLD USAGE:$EOC $0 [OPTIONS]"
+	echo
+	echo -e "$BOLD OPTIONS:$EOC"
+	echo -e "	$BOLD-h$EOC		This help"
+	echo -e "	$BOLD-i$EOC		Install packages after download"
+	echo -e "	$BOLD-k$EOC		Delete files not present at remote site"
+	echo -e "	$BOLD-r <release>$EOC	Act on Slackware version <release>. The default is to download patches for Slackware ${VERSION}"
+	echo -e "	$BOLD-s$EOC		Only install/upgrade packages you've already installed. Skip all new packages."
+	echo -e "	$BOLD-q$EOC		Non-verbose output (for cron jobs)."
+	echo
+	echo -e "$BOLD SETTINGS:$EOC"
+	echo -e "	$BOLD LFTP HOST$EOC: ${LFTPHOST}"
+	echo -e "-------------------------------------------------------------------"
+	echo
+	exit 1
+}
+
+function error
+{ 
+	echo -e "[$RED ERROR $EOC] ${1}"
+	exit 1
+}
+
+function warn
+{
+	if [ ${VERBOSE} -eq 1 ]; then
+		echo -e "[$ORANGE WARN $EOC] ${1}" 
+		sleep 2
+	fi
+}
+
+function step
+{
+	if [ ${VERBOSE} -eq 1 ]; then
+		echo -e "[$BLUE STEP $EOC] ${1}" 
+		sleep 1
+	fi
+}
+
+function completed
+{ 
+	if [ ${VERBOSE} -eq 1 ]; then
+		echo -e "[$GREEN DONE $EOC] ${1}" 
+		sleep 1
+	fi
+}
+
+function isRoot
+{
+	[ -x /bin/id ] && CMD_ID="/bin/id" || CMD_ID="/usr/bin/id"
+	if [ "$($CMD_ID -u)" != "0" ]; then
+		error "You need to be root to run this command."
+		return 1
+	fi
+	return 0
+}
+
+# ----------------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------------
+
+while getopts "hikqr:s" OPTION
+do
+	case $OPTION in
+	h ) SHOWHELP=1 ;;
+	i ) INSTALLPKG=1 ;;
+	k ) DELETEFILES="" ;;
+	r ) VERSION=${OPTARG} ;;
+	s ) SKIPNEWPKG=1; SKIPNEWPKGOPT="" ;;
+	q ) VERBOSE=0 ;;
+	* ) usage ;;
+	esac
+done
+
+shift $(($OPTIND - 1))
+
+[ $SHOWHELP -eq 1 ] && usage
+
+[ ${VERBOSE} -eq 1 ] && LFTPVERBOSE="--verbose" || LFTPVERBOSE=""
+
+warn "Syncing multilib packages for Slackware '${VERSION}'. This may take a while.."
+
+[ "$(uname -m)" = "x86_64" ] && SLACKDIR="slackware64" || SLACKDIR="slackware"
+
+if [ ! -d ${SLACKTREE}/${SLACKDIR}-multilib ]; then
+	if ! mkdir -pv ${SLACKTREE}/${SLACKDIR}-multilib; then
+		error "Could not create the folder ${SLACKTREE}/${SLACKDIR}-multilib"
+	fi
+fi
+
+CURRENT_VER=$(cat /etc/slackware-version |cut -d' ' -f2 |cut -d. -f1-2)
+if [[ "$CURRENT_VER" = "${VERSION}" && $INSTALLPKG -eq 1 ]]; then
+	warn "You've installed Slackware $CURRENT_VER and you selected option \"-i\" which will install packages from Slackware $VERSION"
+fi
+
+if [[ $INSTALLPKG -eq 1 && $SKIPNEWPKG -eq 1 ]]; then
+	warn "New packages found at the repo will be skipped during instalation stage. Only already installed packages will be upgrade."
+fi
+
+step "Changing to '${SLACKTREE}/$SLACKDIR-multilib'.\n"
+
+cd ${SLACKTREE}/$SLACKDIR-multilib
+
+if [ ${VERBOSE} -eq 1 ]; then
+	if ! lftp -c "open ${LFTPHOST} ; mirror -c -e $DELETEFILES $LFTPVERBOSE $VERSION"; then
+		error "Could not connect to remote server or version $VERSION do not exit on the remote server"
+	fi
+else
+# 	lftp -c "open ${LFTPHOST} ; mirror -c -e $DELETEFILES $LFTPVERBOSE $VERSION" > /dev/null 2>&1 \;
+	if ! lftp -c "open ${LFTPHOST} ; mirror -c -e $DELETEFILES $LFTPVERBOSE $VERSION" > /dev/null 2>&1; then
+		error "Could not connect to remote server or version $VERSION do not exit on the remote server"
+	fi
+fi
+
+step "Chown-ing packages to ${USER}:${GROUP}"
+chown -R $USER:$GROUP ${SLACKTREE}/$SLACKDIR-multilib
+
+completed "Done sync-ing. (Exit status: $?)"
+
+if [ $INSTALLPKG -eq 1 ]; then
+	isRoot
+	if [ $SKIPNEWPKG -eq 1 ]; then
+		step "Upgrading files / Installing new files. This may take a while.."
+	else
+		step "Upgrading files. This may take a while.."
+	fi
+	
+	if [ ${VERBOSE} -eq 1 ]; then
+		find ${SLACKTREE}/$SLACKDIR-multilib/$VERSION/ -type f -name "*.t?z" -exec upgradepkg $SKIPNEWPKGOPT {} \;
+	else
+		find ${SLACKTREE}/$SLACKDIR-multilib/$VERSION/ -type f -name "*.t?z" -exec upgradepkg $SKIPNEWPKGOPT {} > /dev/null 2>&1 \;
+	fi
+	completed "Done upgrading. (Exit status: $?)"
+fi
+
+exit 0
