@@ -1,0 +1,310 @@
+#!/bin/bash
+#
+#-----------------------------------------------------------------------------
+# Program name:
+#   	slk-patches-update
+# Purpose:
+#   	Keep the /patches tree for a Slackware release in sync with a master
+#   	server. See the output of the "rsync_slackware_patches.sh -h" command
+#   	for the available command-line switches.
+#   	The patches will be stored in $SLACKTREE/$SLACKDIR-$VERSION/patches/
+# Author:
+#	Eric Hameleers <alien@slackware.com>
+# Modified by:
+#   	Rui 'slackie' Brito <fuzzerpt@gmail.com>
+#-----------------------------------------------------------------------------
+REV="v0.11 - last update 2014/11/11"
+# ----------------------------------------------------------------------------
+# Configurable options
+# ----------------------------------------------------------------------------
+
+
+# Where do we store the downloaded patches in our local filesystem?
+# This location can be overridden on the commandline by setting it as an
+# environment variable, like this:
+# "SLACKTREE=/home/myslack ./rsync_slackware_patches.sh"
+SLACKTREE=${SLACKTREE:-"/home/storage/_PACKAGES"}
+
+# The release we're getting the patches for (override with "-r" option)
+# By default, use the version reported by '/etc/slackware-version':
+SLACKDEF=$(cat /etc/slackware-version |cut -d' ' -f2 |cut -d. -f1-2)
+
+# What architecture will we be mirroring? The default is your current architecture.
+# Alternatively you can specify 'x86' or 'x86_64' meaning 32bit and 64bit respectivily. 
+# The value of SARCH determines the name of the slackware directories.
+# This value can be overruled via the '-a' commandline parameter;
+SARCH=$(uname -m)
+
+# Do we want to see progress reports?
+# (override on the commandline using the "-q" option,
+# to be silent unless there is an update to download)
+VERBOSE=1
+
+# By default we maintain an exact mirror. If you want to keep old packages
+# after they have been deleted from the remote server, use the '-k' or "keep"
+# parameter to keep these old files (or set the KEEPOPTS="" below).
+KEEPOPTS="--delete --delete-excluded"
+
+# We do not want to download packages only - get the sources too!
+# Override with the "-p" commandline option if you want the script to
+# only download packages (i.e. no sources - saves bandwidth):
+PKGONLY=0
+
+# You can use an 'excludes' file that contains items to exclude from the rsync;
+# Add your exclude package patterns to the array below;
+# A temporary file with your excludes will be created;
+# By default nothing is excluded.
+EXCLUDEPKG=0
+EXCLUDEPKGS=("glibc*" "xfce*" "linux-*" "kernel*" "*.txt" "*.asc")
+
+# You may want to automatically upgrade the retrieved packages
+# after you download them, if you do, use the option "-i"
+UPGRADEPKGS=0
+
+# What do we use as the master server?
+# Some good mirrors are:
+#   rsync.osuosl.org::slackware
+#   slackware.mirrors.tds.net::slackware
+#   rsync.slackware.no::slackware
+RSYNCHOST=${RSYNCHOST:-"slackware.mirrors.tds.net::slackware"}
+
+DRYRUN=0
+FORCEINSTALL=0
+
+# Chown downloaded packages to this user and group.
+USER="slackie"
+GROUP="users"
+
+# Some terminal colors to make it a bit more cute
+RED='\033[1m\E[31;40m'
+GREEN='\033[1m\E[32;40m'
+BLUE='\033[1m\E[34;40m'
+ORANGE='\033[1m\E[33;40m'
+BOLD='\033[1m'
+EOC='\033[0m'
+
+# ----------------------------------------------------------------------------
+# Functions
+# ----------------------------------------------------------------------------
+
+function usage
+{
+	echo
+	echo -e "-------------------------------------------------------------------"
+	echo -e " $BOLD$0$EOC, $REV"
+	echo -e "-------------------------------------------------------------------"
+	echo -e "$BOLD USAGE:$EOC $0 [OPTIONS]"
+	echo
+	echo -e "$BOLD OPTIONS:$EOC"
+	echo -e "	$BOLD-a <arch>$EOC	Architecture to mirror (defaults to '$BOLD${SARCH}$EOC')"
+	echo -e "	$BOLD-f$EOC           	Force upgrade packages even if checksum reports no changes."
+	echo -e "	$BOLD-h$EOC           	This help."
+	echo -e "	$BOLD-i$EOC		Install new patches after sync-ing them."
+	echo -e "	$BOLD-k$EOC		Keep old local files even though they were removed on the remote server."
+	echo -e "	$BOLD-n$EOC		Rsync dry-run (don't download anything)."
+	echo -e "	$BOLD-p$EOC		Download packages only - not the sources."
+	echo -e "	$BOLD-r <release>$EOC	Act on Slackware version <release>. The default is to download patches for Slackware $BOLD${SLACKDEF}$EOC"
+	echo -e "	$BOLD-q$EOC		Non-verbose output (for cron jobs)."
+	echo -e "	$BOLD-X$EOC		Gives a list of exclude patterns for packages that you do not want mirrored."
+	echo -e "			$BOLD	Currently excluded patterns$EOC: ${EXCLUDEPKGS[@]}"
+	echo
+	echo -e "$BOLD SETTINGS:$EOC"
+	echo -e "	$BOLD Rsync server$EOC:	'${RSYNCHOST}'."
+	echo -e "	$BOLD Local mirror$EOC:	'${SLACKTREE}/$SLACKDIR-$VERSION'"
+	echo -e "-------------------------------------------------------------------"
+	echo
+	exit 1
+}
+
+function error
+{ 
+	echo -e "[$RED ERROR $EOC] ${1}"
+	exit 1
+}
+
+function warn
+{
+	if [ ${VERBOSE} -eq 1 ]; then
+		echo -e "[$ORANGE WARN $EOC] ${1}" 
+		sleep 2
+	fi
+}
+
+function step
+{
+	if [ ${VERBOSE} -eq 1 ]; then
+		echo -e "[$BLUE STEP $EOC] ${1}" 
+		sleep 1
+	fi
+}
+
+function completed
+{ 
+	if [ ${VERBOSE} -eq 1 ]; then
+		echo -e "[$GREEN DONE $EOC] ${1}" 
+		sleep 1
+	fi
+}
+
+function isRoot
+{
+	[ -x /bin/id ] && CMD_ID="/bin/id" || CMD_ID="/usr/bin/id"
+	if [ "$($CMD_ID -u)" != "0" ]; then
+		error "You need to be root to run this command."
+		return 1
+	fi
+	return 0
+}
+
+function inArray
+{
+	local haystack=${1}[@]
+	local needle=${2}
+
+	for i in ${!haystack}; do
+		if [[ ${i} == ${needle} ]]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+# ----------------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------------
+SHOWHELP=0
+
+while getopts "a:fhiknpr:qX" OPTION
+do
+	case $OPTION in
+		a ) SARCH=${OPTARG} ;;
+		f ) FORCEINSTALL=1 ;;
+		h ) SHOWHELP=1 ;;
+		k ) KEEPOPTS=" " ;;
+		n ) 	DRYRUN=1 
+			RSYNCOPTS="${RSYNCOPTS} -n" 
+			;;
+		p ) PKGONLY=1 ;;
+		r ) VERSION=${OPTARG} ;;
+		q ) VERBOSE=0 ;;
+		X ) EXCLUDEPKG=1 ;;
+		i) UPGRADEPKGS=1 ;;
+		* ) usage ;;   # DEFAULT
+	esac
+done
+
+shift $(($OPTIND - 1))
+
+# Set some values early, to be used in the help output:
+VERSION=${VERSION:-${SLACKDEF}}
+[ "$SARCH" = "x86_64" ] && SLACKDIR="slackware64" || SLACKDIR="slackware" 
+
+[ $SHOWHELP -eq 1 ] && usage
+
+[ ${VERBOSE} -eq 1 ] && RSYNCVERBOSE="-v --progress" || RSYNCVERBOSE="-q"
+
+if [ ! -d ${SLACKTREE}/${SLACKDIR}-${VERSION}-patches/ ]; then
+	if ! mkdir -pv ${SLACKTREE}/${SLACKDIR}-${VERSION}-patches; then
+		error "Could not create the folder ${SLACKTREE}/${SLACKDIR}-${VERSION}-patches"
+	fi
+fi
+
+[[ $DRYRUN -eq 0 ]] && warn "Syncing patches for ${SLACKDIR} version '${VERSION}'. This may take a while" || warn "Performing a dry-run!" 
+
+# Exclude the sources if requested:
+[ $PKGONLY -eq 1 ] && RSYNCOPTS="$RSYNCOPTS --exclude=patches/source"
+[[ $PKGONLY -eq 1 && $DRYRUN -eq 0 ]] && warn "Not downloading sources, only packages!"
+
+[[ $DRYRUN -eq 0 ]] && step "Changing to '${SLACKTREE}/$SLACKDIR-$VERSION-patches/'."
+cd ${SLACKTREE}/$SLACKDIR-$VERSION-patches
+
+if [ $EXCLUDEPKG -eq 1 ]; then
+	EXCLUDETMPFILE=$(mktemp /tmp/ExcludePatterns.XXXXXX)
+	for i in "${EXCLUDEPKGS[@]}"; do
+		echo "patches/packages/$i" >> $EXCLUDETMPFILE
+		if [ $PKGONLY -eq 0 ]; then
+			echo "patches/source/$i" >> $EXCLUDETMPFILE
+		fi
+	done
+	
+	if [ -f "$EXCLUDETMPFILE" ]; then
+		step "Excluding files found in '$EXCLUDETMPFILE'"
+		RSYNCOPTS="$RSYNCOPTS --exclude-from=$EXCLUDETMPFILE"
+	else
+		error "File ($EXCLUDETMPFILE) containing excluded package were not found"
+	fi
+fi
+
+# Record time of last modification of CHECKSUMS.md5 (it might not yet be there!)
+LASTMOD=$(stat -c %Y ./patches/CHECKSUMS.md5 2>/dev/null)
+LASTMOD=${LASTMOD:-0}
+
+# Keep a copy of ChangeLog.txt for feedback in case of updates:
+TMPFILE=$(mktemp /tmp/ChangeLog.XXXXXX)
+TMPFILE=${TMPFILE:-/tmp/ChangeLog.txt.$$}
+cat ChangeLog.txt > $TMPFILE 2>/dev/null
+
+step "Here we go... using master '${RSYNCHOST}'"
+
+rsync ${RSYNCOPTS} ${RSYNCVERBOSE} -az --delete ${RSYNCHOST}/$SLACKDIR-$VERSION/ChangeLog.txt .
+rsync ${RSYNCOPTS} ${RSYNCVERBOSE} -az ${KEEPOPTS} ${RSYNCHOST}/$SLACKDIR-$VERSION/patches .
+
+[[ $VERBOSE -eq 1 ]] && completed "Done sync-ing (Exit status: $?)"
+
+echo ""
+
+if [ $DRYRUN -eq 0 ]; then
+	# Compare time of last modification of the CHECKSUMS.md5 to what we had:
+	NEWMOD=$(stat -c %Y ./patches/CHECKSUMS.md5)
+	NEWMOD=${NEWMOD:-0}
+
+	if [ $LASTMOD -ne $NEWMOD ]; then
+		warn "New patches have arrived for Slackware ${VERSION} ($SARCH)!"
+		
+	# 	**from original**
+	# 	diff $TMPFILE ChangeLog.txt
+	
+		# If UPGRADEPKGS=1 then lets upgrade the packages
+		if [ $UPGRADEPKGS -eq 1 ]; then
+			isRoot
+			step "Installing patches for Slackware ${VERSION} ($SARCH)!"
+			if [ ${VERBOSE} -eq 1 ]; then
+				find ${SLACKTREE}/${SLACKDIR}-${VERSION}-patches/ -type f -name "*.t?z" -exec upgradepkg {} \;
+			else
+				find ${SLACKTREE}/${SLACKDIR}-${VERSION}-patches/ -type f -name "*.t?z" -exec upgradepkg {} > /dev/null \;
+			fi
+		fi
+		
+		step "Chown-ing packages to ${USER}:${GROUP}"
+		chown -R $USER:$GROUP ${SLACKTREE}/${SLACKDIR}-${VERSION}-patches/
+	else
+		completed "No change detected in the CHECKSUMS.md5 file."
+		
+		# If FORCEINSTALL=1 then lets upgrade the packages anyway.
+		if [ $FORCEINSTALL -eq 1 ]; then
+			UPGRADEPKGS=1
+			if [ $UPGRADEPKGS -eq 1 ]; then
+				isRoot
+				step "Installing patches for Slackware ${VERSION} ($SARCH)! $BOLD*FORCED*$EOC"
+				if [ ${VERBOSE} -eq 1 ]; then
+					find ${SLACKTREE}/${SLACKDIR}-${VERSION}-patches/ -type f -name "*.t?z" -exec upgradepkg {} \;
+				else
+					find ${SLACKTREE}/${SLACKDIR}-${VERSION}-patches/ -type f -name "*.t?z" -exec upgradepkg {} > /dev/null \;
+				fi
+			fi
+		fi
+	fi
+fi
+
+# Clean up:
+[[ $DRYRUN -eq 0 ]] && completed "Removing temporary file '$TMPFILE'."
+rm -f $TMPFILE
+
+if [ $EXCLUDEPKG -eq 1 ]; then
+	rm -f $EXCLUDETMPFILE
+	completed "Removing temporary file '$EXCLUDETMPFILE'."
+fi
+
+[[ $DRYRUN -eq 1 ]] && completed "Done dry-run (Exit status: $?)"
+
+exit 0
