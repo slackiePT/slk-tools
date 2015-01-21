@@ -4,7 +4,7 @@
 
 /** ****************************************************************************
 * Program name:
-*   	TL.php
+*   	slk-torrentleech
 * Purpose:
 *	Tracks torrentleech feed and download desired torrents to transmission-daemon.
 *	See output of TL.php -h command.
@@ -63,7 +63,7 @@ class TL {
 			echo "-------------------------------------------------------------------\n";
 			echo " slk-torrentleech, ".$this->SETTINGS['revision']."\n";
 			echo "-------------------------------------------------------------------\n";
-			echo " USAGE: php -q slk-torrentleech [OPTIONS]\n";
+			echo " USAGE: ./slk-torrentleech [OPTIONS]\n";
 			echo "\n";
 			echo " OPTIONS:\n";
 			echo "	-d 				Debug mode. (w/o -d means non-verbose output (for cron jobs))\n";
