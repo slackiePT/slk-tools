@@ -10,7 +10,7 @@
 *	See output of TL.php -h command.
 * Author:
 *   	Rui 'slackie' Brito <fuzzerpt@gmail.com>
-**************************************************************************** **/																																	
+**************************************************************************** **/
 
 class TL {
 
@@ -38,7 +38,7 @@ class TL {
 						array("The Vampire Diaries", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
 						array("Greys Anatomy", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
 						array("Once Upon a Time", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
-						
+
 						array("Marvels Agent Carter", array("x264-KILLERS"), array("720p", "HDTV")),
 						array("Family Guy", array("x264-KILLERS"), array("720p", "HDTV")),
 						array("The Simpsons", array("x264-KILLERS"), array("720p", "HDTV")),
@@ -57,7 +57,7 @@ class TL {
 	{
 		$this->OPTIONS = getopt("dhAR");
 		$this->XML = simplexml_load_file($this->SETTINGS['rss_link']) or die("Error: Cannot create object.");
-		
+
 		if(isset($this->OPTIONS['h']))
 		{
 			echo "-------------------------------------------------------------------\n";
@@ -78,17 +78,14 @@ class TL {
 			echo "\n";
 			exit();
 		}
-		
-		
+
 		$count=1;
 		foreach($this->XML->channel->item as $item)
 		{
-
 			self::outputLog("checking item: $item->title");
-			
+
 			if (in_array($item->category, (array)$this->SETTINGS['categories']))
 			{
-				
 				for($i=0; $i<count($this->SETTINGS['torrents']); $i++)
 				{
 					// Category Episodes
@@ -221,7 +218,7 @@ class TL {
 							}
 						}
 					}
-					
+
 					// Category Episodes HD
 					if($item->category == "Episodes HD")
 					{
@@ -352,7 +349,7 @@ class TL {
 							}
 						}
 					}
-					
+
 					// Category HD
 					if($item->category == "HD")
 					{
@@ -398,13 +395,13 @@ class TL {
 			echo "\n";
 			$count++;
 		}
-		
+
 		if(isset($this->OPTIONS['d']))
 		{
 			echo "\n";
 			echo "-------------------------------------------------------------------\n\n";
 			echo "Total targets: ".count($this->SETTINGS['torrents'])."\n\n";
-			
+
 			echo "Total accepted torrents: ".count($this->SETTINGS['accepted_tor'])."\n\n";
 			if(isset($this->OPTIONS['A']))
 			{
@@ -414,7 +411,7 @@ class TL {
 				}
 				echo "\n";
 			}
-			
+
 			echo "Total rejected torrents: ".(count($this->SETTINGS['rejected_tor'])-count($this->SETTINGS['accepted_tor']))."\n\n";
 			if(isset($this->OPTIONS['R']))
 			{
@@ -428,7 +425,7 @@ class TL {
 			echo "-------------------------------------------------------------------\n";
 		}
 	}
-	
+
 	function getCategory($category)
 	{
 		switch($category)
@@ -443,11 +440,11 @@ class TL {
 			default: return "$category\t"; break;
 		}
 	}
-	
+
 	function outputLog($log)
 	{
 		date_default_timezone_set($this->SETTINGS['timezone']);
-		
+
 		if(isset($this->OPTIONS['d']))
 		{
 			if(!isset($this->OPTIONS['A']) && !isset($this->OPTIONS['R']))
