@@ -1,0 +1,424 @@
+#!/bin/bash
+#
+#-----------------------------------------------------------------------------
+# Program name:
+#   	slk-backup
+# Purpose:
+#	Backup folders/files/databases.
+#	See output of slk-backup -h command.
+# Author:
+#   	Rui 'slackie' Brito <fuzzerpt@gmail.com>
+#-----------------------------------------------------------------------------
+REV="v0.12 - last update 2015/01/13"
+# ----------------------------------------------------------------------------
+# Configurable options
+# ----------------------------------------------------------------------------
+
+# This is the directory structure for the backups stuff
+BACKUPS_DIR=${BACKUPS_DIR:-/backups}
+BACKUPS_VPS_DIR=${BACKUPS_VPS_DIR:-${BACKUPS_DIR}/_VPSes}
+VPS_SYNC_DIR=${VPS_SYNC_DIR:-${BACKUPS_VPS_DIR}/.SYNC}
+PUB_SERVERS_DIR=${PUB_SERVERS_DIR:-/var/www/servers.bob-ac.net}
+
+LOCAL_SSH_HOST=${LOCAL_SSH_HOST:-"goblin.bob-ac.net"}
+LOCAL_SSH_USER=${LOCAL_SSH_USER:-"slackie"}
+LOCAL_SSH_PORT=${LOCAL_SSH_PORT:-"223"}
+LOCAL_RSA_KEY=${LOCAL_RSA_KEY:-"/home/slackie/.ssh/id_rsa"}
+
+VERBOSE=1
+SHOWHELP=0
+SYNCFILES=0
+BACKUPFILES=0
+LOCALSERVER=0
+
+# Some terminal colors to make it a bit more cute
+RED='\033[1m\E[31;40m'
+GREEN='\033[1m\E[32;40m'
+BLUE='\033[1m\E[34;40m'
+ORANGE='\033[1m\E[33;40m'
+PINK='\033[1m\E[35;40m'
+BOLD='\033[1m'
+EOC='\033[0m'
+
+# Default commands options
+TAR_OPTIONS="cvfP"
+MV_OPTIONS="-v"
+CP_OPTIONS="-vr"
+MKDIR_OPTIONS="-pv"
+RM_OPTIONS="-rv"
+LN_OPTIONS="-sv"
+
+# ----------------------------------------------------------------------------
+# Functions
+# ----------------------------------------------------------------------------
+
+function usage
+{
+	echo
+	echo -e "-------------------------------------------------------------------"
+	echo -e " $BOLD$0$EOC, $REV"
+	echo -e "-------------------------------------------------------------------"
+	echo -e "$BOLD USAGE:$EOC $0 [OPTIONS]"
+	echo
+	echo -e "$BOLD OPTIONS:$EOC"
+	echo -e "	$BOLD-b$EOC		Backup most important AC folders/files"
+	echo -e "			$BOLD Default targets$EOC: acRunner (if applies); config files ; binaries ; bash scripts ]"
+	echo -e "	$BOLD-h$EOC		This help"
+	echo -e "	$BOLD-H <host>$EOC	Connect to the SSH server on the given host"
+	echo -e "	$BOLD-L$EOC		Tells to the script that want to do local procedures"
+	echo -e "	$BOLD-q$EOC		Non-verbose output (for cron jobs)."
+	echo -e "	$BOLD-p <port>$EOC	The SSH port to use when connecting to the server"
+	echo -e "	$BOLD-P <pattern>$EOC	The pattern to use when looking for directories on the remote server"
+	echo -e "	$BOLD-s$EOC		Sync logs and demos from the remote server to local server"
+	echo -e "	$BOLD-u <user>$EOC	The SSH user name to use when connecting to the server"
+	echo
+	echo -e "$BOLD SETTINGS:$EOC"
+	echo -e "	$BOLD Backup DIR$EOC: ${BACKUPS_VPS_DIR}"
+	echo -e "	$BOLD Public DIR$EOC: ${PUB_SERVERS_DIR}"
+	echo -e "-------------------------------------------------------------------"
+	echo
+	exit 1
+}
+
+function error
+{ 
+	echo -e "[$RED ERROR $EOC] ${1}"
+	exit 1
+}
+
+function warn
+{
+	if [ ${VERBOSE} -eq 1 ]; then
+		echo -e "[$ORANGE WARN $EOC] ${1}" 
+		sleep 2
+	fi
+}
+
+function step
+{
+	if [ ${VERBOSE} -eq 1 ]; then
+		echo -e "[$BLUE STEP $EOC] ${1}" 
+		sleep 1
+	fi
+}
+
+function completed
+{ 
+	if [ ${VERBOSE} -eq 1 ]; then
+		echo -e "[$GREEN DONE $EOC] ${1}" 
+		sleep 1
+	fi
+}
+
+function isRoot
+{
+	[ -x /bin/id ] && CMD_ID="/bin/id" || CMD_ID="/usr/bin/id"
+	if [ "$($CMD_ID -u)" != "0" ]; then
+		error "You need to be root to run this command."
+	fi
+}
+
+function inArray
+{
+	local haystack=${1}[@]
+	local needle=${2}
+
+	for i in ${!haystack}; do
+		if [[ ${i} == ${needle} ]]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+isOnline()
+{
+	local SSH_HOST=${1}
+	local SSH_USER=${2}
+	local SSH_PORT=${3}
+	local RSA_KEY="-i ${4}"
+
+	ssh -q $RSA_KEY -o "BatchMode=yes" -o "ConnectTimeout=5" $SSH_USER@$SSH_HOST "echo 2>&1" && return 0 || return 1
+}
+
+isMounted()
+{
+	local SSH_HOST=${1}
+	local SSH_USER=${2}
+	local SSH_PORT=${3}
+	
+	if [ ! -d "/mnt/$SSH_HOST" ]; then
+		mkdir $MKDIR_OPTIONS /mnt/$SSH_HOST
+	fi
+	
+	if mount | grep /mnt/$SSH_HOST > /dev/null; then
+		if [ "$(ls -A /mnt/$SSH_HOST)" ]; then
+			warn "/mnt/$SSH_HOST is already mounted"
+		else
+			umount /mnt/$SSH_HOST
+			if sshfs -o IdentityFile=${LOCAL_RSA_KEY} -o uid=0 -o gid=0 $SSH_USER@$SSH_HOST:/home/$SSH_USER /mnt/$SSH_HOST; then
+				completed "/mnt/$SSH_HOST was successfuly mounted"
+				return 0
+			else
+				error "isMounted(): SSHFS mount failed on /mnt/$SSH_HOST"
+			fi
+		fi
+	else
+		if sshfs -o IdentityFile=${LOCAL_RSA_KEY} -o uid=0 -o gid=0 $SSH_USER@$SSH_HOST:/home/$SSH_USER /mnt/$SSH_HOST; then
+			completed "/mnt/$SSH_HOST was successfuly mounted"
+				return 0
+		else
+			error "isMounted(): SSHFS mount failed on /mnt/$SSH_HOST"
+		fi
+	fi
+}
+
+# ----------------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------------
+
+while getopts bhH:Lqp:P:su: OPTION; do
+	case "${OPTION}" in
+		b ) BACKUPFILES=1 ;;
+		h ) SHOWHELP=1 ;;
+		H ) SSH_HOST=${OPTARG} ;;
+		L ) LOCALSERVER=1 ;;
+		q ) VERBOSE=0 ;;
+		p ) SSH_PORT=${OPTARG} ;;
+		P ) 
+			FPATTERN=1
+			PATTERNS+=(${OPTARG})
+			;;
+		s ) SYNCFILES=1 ;;
+		u ) SSH_USER=${OPTARG} ;;
+		* ) usage ;;
+	esac
+done
+
+shift $(($OPTIND - 1))
+
+[ ${SHOWHELP} -eq 1 ] && usage
+
+if [ ${VERBOSE} -eq 0 ]; then
+	TAR_OPTIONS="cfP"
+	MV_OPTIONS=""
+	CP_OPTIONS="-r"
+	MKDIR_OPTIONS="-p"
+	RM_OPTIONS="-r"
+	LN_OPTIONS="-s"
+fi
+
+[ ${VERBOSE} -eq 1 ] && RSYNCVERBOSE="-v --progress" || RSYNCVERBOSE="-q"
+
+if [ ${BACKUPFILES} -eq 1 ]; then
+	
+	isRoot
+	
+	if [ ${#PATTERNS[@]} -eq 0 ]; then
+		error "The follow option are required: $BOLD-P <pattern>$EOC"
+	fi
+	
+	if [ ${LOCALSERVER} -eq 1 ]; then
+		for pattern in "${PATTERNS[@]}"; do
+			for folder in `ls /home/${LOCAL_SSH_USER}`; do
+				if [[ "$folder" =~ $pattern ]]; then
+					
+					if [ ! -d ${BACKUPS_VPS_DIR}/${LOCAL_SSH_HOST}/$folder/backups ]; then
+						mkdir $MKDIR_OPTIONS ${BACKUPS_VPS_DIR}/${LOCAL_SSH_HOST}/$folder/backups
+					fi
+					
+					cd /tmp
+					TMPFOLDER=$folder-$(date +%Y%m%d)
+					mkdir /tmp/$TMPFOLDER
+					
+					if [ -d /home/${LOCAL_SSH_USER}/$folder/acRunner ]; then
+						step "Sync-ing acRunner on $folder @ ${LOCAL_SSH_HOST}"
+						cp -r /home/${LOCAL_SSH_USER}/$folder/acRunner /tmp/$TMPFOLDER
+					fi
+					
+					
+					
+					step "Sync-ing config files on $folder @ ${LOCAL_SSH_HOST}"
+					cp -r /home/${LOCAL_SSH_USER}/$folder/config /tmp/$TMPFOLDER
+					
+					step "Sync-ing AC binaries files on $folder @ ${LOCAL_SSH_HOST}"
+					cp -r /home/${LOCAL_SSH_USER}/$folder/bin_unix /tmp/$TMPFOLDER
+					
+					step "Sync-ing bash scripts on $folder @ ${LOCAL_SSH_HOST}"
+					cp -r /home/${LOCAL_SSH_USER}/$folder/*.sh /tmp/$TMPFOLDER
+					
+					step "Creating a backup file of $folder @ ${LOCAL_SSH_HOST}"
+					
+					tar -cf $TMPFOLDER.tar $TMPFOLDER && bzip2 $TMPFOLDER.tar
+					mv $MV_OPTIONS $TMPFOLDER.tar.bz2 ${BACKUPS_VPS_DIR}/${LOCAL_SSH_HOST}/$folder/backups
+					rm $RM_OPTIONS $TMPFOLDER*
+				fi
+			done
+		done
+		
+		step "Updating symlinks of $folder @ ${LOCAL_SSH_HOST}"
+		if [ -d ${PUB_SERVERS_DIR}/${LOCAL_SSH_HOST} ]; then
+			rm $RM_OPTIONS ${PUB_SERVERS_DIR}/${LOCAL_SSH_HOST}
+		fi
+		ln $LN_OPTIONS ${BACKUPS_VPS_DIR}/${LOCAL_SSH_HOST}/ ${PUB_SERVERS_DIR}/${LOCAL_SSH_HOST}
+		
+		completed "Sync-ing and backup completed"
+		
+		exit 0
+	fi
+	
+	if [[ $SSH_HOST = "" || $SSH_USER = "" || $SSH_PORT = "" ]]; then
+		error "The follow options are required: $BOLD-H <host>$EOC ; $BOLD-u <user>$EOC ; $BOLD-p <ssh_port>$EOC"
+	fi
+	
+	if isOnline $SSH_HOST $SSH_USER $SSH_PORT ${LOCAL_RSA_KEY}; then
+		isMounted $SSH_HOST $SSH_USER $SSH_PORT
+		
+		for pattern in "${PATTERNS[@]}"; do
+			for folder in `ls /mnt/$SSH_HOST/`; do
+				if [[ "$folder" =~ $pattern ]]; then
+					if [ ! -d ${VPS_SYNC_DIR}/$SSH_HOST/$folder ]; then
+						mkdir $MKDIR_OPTIONS ${VPS_SYNC_DIR}/$SSH_HOST/$folder
+					fi
+					
+					if [ ! -d ${BACKUPS_VPS_DIR}/$SSH_HOST/$folder/backups ]; then
+						mkdir $MKDIR_OPTIONS ${BACKUPS_VPS_DIR}/$SSH_HOST/$folder/backups
+					fi
+					
+					if ssh -i ${LOCAL_RSA_KEY} $SSH_USER@$SSH_HOST "[ -d /home/$SSH_USER/$folder/acRunner ]"; then
+						step "Sync-ing acRunner on $folder @ $SSH_HOST"
+						rsync ${RSYNCVERBOSE} -az -e "ssh -i ${LOCAL_RSA_KEY}" $SSH_USER@$SSH_HOST:/home/$SSH_USER/$folder/acRunner ${VPS_SYNC_DIR}/$SSH_HOST/$folder
+					fi
+					
+					step "Sync-ing config files on $folder @ $SSH_HOST"
+					rsync ${RSYNCVERBOSE} -az -e "ssh -i ${LOCAL_RSA_KEY}" $SSH_USER@$SSH_HOST:/home/$SSH_USER/$folder/config ${VPS_SYNC_DIR}/$SSH_HOST/$folder
+					
+					step "Sync-ing AC binaries files on $folder @ $SSH_HOST"
+					rsync ${RSYNCVERBOSE} -az -e "ssh -i ${LOCAL_RSA_KEY}" $SSH_USER@$SSH_HOST:/home/$SSH_USER/$folder/bin_unix ${VPS_SYNC_DIR}/$SSH_HOST/$folder
+					
+					step "Sync-ing bash scripts on $folder @ $SSH_HOST"
+					rsync ${RSYNCVERBOSE} -az -e "ssh -i ${LOCAL_RSA_KEY}" $SSH_USER@$SSH_HOST:/home/$SSH_USER/$folder/*.sh ${VPS_SYNC_DIR}/$SSH_HOST/$folder
+					
+					step "Creating a backup file of $folder @ $SSH_HOST"
+					cd ${VPS_SYNC_DIR}/$SSH_HOST/
+					TMPFOLDER=$folder-$(date +%Y%m%d)
+					cp -r $folder $TMPFOLDER
+					tar -cf $TMPFOLDER.tar $TMPFOLDER && bzip2 $TMPFOLDER.tar
+					mv $MV_OPTIONS $TMPFOLDER.tar.bz2 ${BACKUPS_VPS_DIR}/$SSH_HOST/$folder/backups
+					rm $RM_OPTIONS $TMPFOLDER*
+				fi
+			done
+		done
+		
+		step "Updating symlinks of $folder @ $SSH_HOST"
+		if [ -d ${PUB_SERVERS_DIR}/$SSH_HOST ]; then
+			rm $RM_OPTIONS ${PUB_SERVERS_DIR}/$SSH_HOST
+		fi
+		ln $LN_OPTIONS ${BACKUPS_VPS_DIR}/$SSH_HOST/ ${PUB_SERVERS_DIR}/$SSH_HOST
+		
+		completed "Sync-ing and backup completed"
+	else
+		error "Could not connect to $SSH_USER@$SSH_HOST/$SSH_PORT. Backup aborted"
+	fi
+fi
+
+if [ ${SYNCFILES} -eq 1 ]; then
+	
+	isRoot
+	
+	if [ ${#PATTERNS[@]} -eq 0 ]; then
+		error "The follow option are required: $BOLD-P <pattern>$EOC"
+	fi
+	
+	if [ ${LOCALSERVER} -eq 1 ]; then
+		for pattern in "${PATTERNS[@]}"; do
+			for folder in `ls /home/${LOCAL_SSH_USER}/`; do
+				if [[ "$folder" =~ $pattern ]]; then
+					
+					if [ ! -d ${BACKUPS_VPS_DIR}/${LOCAL_SSH_HOST} ]; then
+						mkdir $MKDIR_OPTIONS ${BACKUPS_VPS_DIR}/${LOCAL_SSH_HOST}
+					fi
+					
+					if [ ! -d ${BACKUPS_VPS_DIR}/${LOCAL_SSH_HOST}/$folder/demos ]; then
+						mkdir $MKDIR_OPTIONS ${BACKUPS_VPS_DIR}/${LOCAL_SSH_HOST}/$folder/demos
+					fi
+					
+					if [ ! -d ${BACKUPS_VPS_DIR}/${LOCAL_SSH_HOST}/$folder/logs ]; then
+						mkdir $MKDIR_OPTIONS ${BACKUPS_VPS_DIR}/${LOCAL_SSH_HOST}/$folder/logs
+					fi
+					
+					step "Sync-ing logs on $folder @ ${LOCAL_SSH_HOST}"
+					rm $RM_OPTIONS ${BACKUPS_VPS_DIR}/${LOCAL_SSH_HOST}/$folder/logs/*
+					ln $LN_OPTIONS /home/${LOCAL_SSH_USER}/$folder/serverlog_* ${BACKUPS_VPS_DIR}/${LOCAL_SSH_HOST}/$folder/logs
+					
+					step "Sync-ing demos on $folder @ ${LOCAL_SSH_HOST}"
+					rm $RM_OPTIONS ${BACKUPS_VPS_DIR}/${LOCAL_SSH_HOST}/$folder/demos/*
+					ln $LN_OPTIONS /home/${LOCAL_SSH_USER}/$folder/demos/* ${BACKUPS_VPS_DIR}/${LOCAL_SSH_HOST}/$folder/demos
+					
+				fi
+			done
+		done
+		
+		step "Updating symlinks of $folder @ ${LOCAL_SSH_HOST}"
+		if [ -d ${PUB_SERVERS_DIR}/${LOCAL_SSH_HOST} ]; then
+			rm $RM_OPTIONS ${PUB_SERVERS_DIR}/${LOCAL_SSH_HOST}
+		fi
+		ln $LN_OPTIONS ${BACKUPS_VPS_DIR}/${LOCAL_SSH_HOST}/ ${PUB_SERVERS_DIR}/${LOCAL_SSH_HOST}
+		
+		completed "Sync-ing and backup completed"
+		
+		exit 0
+	fi
+	
+	if [[ $SSH_HOST = "" || $SSH_USER = "" || $SSH_PORT = "" ]]; then
+		error "The follow options are required: $BOLD-H <host>$EOC ; $BOLD-u <user>$EOC ; $BOLD-p <ssh_port>$EOC"
+	fi
+	
+	if isOnline $SSH_HOST $SSH_USER $SSH_PORT ${LOCAL_RSA_KEY}; then
+		isMounted $SSH_HOST $SSH_USER $SSH_PORT
+		
+		for pattern in "${PATTERNS[@]}"; do
+			for folder in `ls /mnt/$SSH_HOST/`; do
+				if [[ "$folder" =~ $pattern ]]; then
+					
+					if [ ! -d ${BACKUPS_VPS_DIR}/$SSH_HOST ]; then
+						mkdir $MKDIR_OPTIONS ${BACKUPS_VPS_DIR}/$SSH_HOST
+					fi
+					
+					if [ ! -d ${BACKUPS_VPS_DIR}/$SSH_HOST/$folder/demos ]; then
+						mkdir $MKDIR_OPTIONS ${BACKUPS_VPS_DIR}/$SSH_HOST/$folder/demos
+					fi
+					
+					if [ ! -d ${BACKUPS_VPS_DIR}/$SSH_HOST/$folder/logs ]; then
+						mkdir $MKDIR_OPTIONS ${BACKUPS_VPS_DIR}/$SSH_HOST/$folder/logs
+					fi
+					
+					step "Sync-ing logs on $folder @ $SSH_HOST"
+					rsync ${RSYNCVERBOSE} -az -e "ssh -i ${LOCAL_RSA_KEY}" $SSH_USER@$SSH_HOST:/home/$SSH_USER/$folder/serverlog_* ${BACKUPS_VPS_DIR}/$SSH_HOST/$folder/logs
+					
+					step "Sync-ing demos on $folder @ $SSH_HOST"
+					rsync ${RSYNCVERBOSE} -az -e "ssh -i ${LOCAL_RSA_KEY}" $SSH_USER@$SSH_HOST:/home/$SSH_USER/$folder/demos/ ${BACKUPS_VPS_DIR}/$SSH_HOST/$folder/demos
+					
+				fi
+			done
+		done
+		
+		step "Updating symlinks of $folder @ $SSH_HOST"
+		if [ -d ${PUB_SERVERS_DIR}/$SSH_HOST ]; then
+			rm $RM_OPTIONS ${PUB_SERVERS_DIR}/$SSH_HOST
+		fi
+		ln $LN_OPTIONS ${BACKUPS_VPS_DIR}/$SSH_HOST/ ${PUB_SERVERS_DIR}/$SSH_HOST
+		
+		completed "Sync-ing and backup completed"
+	else
+		error "Could not connect to $SSH_USER@$SSH_HOST/$SSH_PORT. Sync aborted."
+	fi
+fi
+
+# clean up sshd procs
+IFS=' ' read -a SSH_PIDS <<< "$(echo $(pidof "sshd: slackie [priv]"))"
+for i in "${SSH_PIDS[@]}"; do
+	kill -9 $i
+done
+
+exit 0
