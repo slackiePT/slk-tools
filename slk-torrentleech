@@ -1,0 +1,452 @@
+#!/usr/bin/env php
+
+<?php
+
+/** ****************************************************************************
+* Program name:
+*   	TL.php
+* Purpose:
+*	Tracks torrentleech feed and download desired torrents to transmission-daemon.
+*	See output of TL.php -h command.
+* Author:
+*   	Rui 'slackie' Brito <fuzzerpt@gmail.com>
+**************************************************************************** **/																																	
+
+class TL {
+
+	public $XML;
+	public $OPTIONS;
+	public $SETTINGS = array(
+			"revision"	=> "v0.10 - last update 2015/01/21",
+			"rss_link"	=> "http://rss.torrentleech.org/fdb9bf907f162abdfe89",
+			"watch_dir"	=> "/home/slackie/transmission/new",
+			"timezone"	=> "Europe/Lisbon",
+			"categories" 	=> array("Episodes", "Episodes HD", "HD"),
+			"torrents" 	=> array(
+						array("Person of Interest", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
+						array("The Mentalist", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
+						array("Constantine", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
+						array("The Big Bang Theory", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
+						array("The Mentalist", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
+						array("Grimm", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
+						array("Gotham", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
+						array("Elementary", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
+						array("Scorpion", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
+						array("Supernatural", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
+						array("The Blacklist", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
+						
+						array("Marvels Agent Carter", array("x264-KILLERS"), array("720p", "HDTV")),
+						array("Family Guy", array("x264-KILLERS"), array("720p", "HDTV")),
+						array("The Simpsons", array("x264-KILLERS"), array("720p", "HDTV")),
+						array("Modern Family", array("x264-KILLERS"), array("720p", "HDTV")),
+						array("12 Monkeys", array("x264-KILLERS"), array("720p", "HDTV")),
+						array("Game of Thrones", array("x264-KILLERS"), array("720p", "HDTV")),
+						array("Homeland", array("x264-KILLERS"), array("720p", "HDTV")),
+						array("The Walking Dead", array("x264-KILLERS"), array("720p", "HDTV")),
+					),
+			"accepted_tor" => array(),
+			"rejected_tor" => array()
+	);
+
+	function __construct()
+	{
+		$this->OPTIONS = getopt("dhAR");
+		$this->XML = simplexml_load_file($this->SETTINGS['rss_link']) or die("Error: Cannot create object.");
+		
+		if(isset($this->OPTIONS['h']))
+		{
+			echo "-------------------------------------------------------------------\n";
+			echo " slk-torrentleech, ".$this->SETTINGS['revision']."\n";
+			echo "-------------------------------------------------------------------\n";
+			echo " USAGE: php -q slk-torrentleech [OPTIONS]\n";
+			echo "\n";
+			echo " OPTIONS:\n";
+			echo "	-d 				Debug mode. (w/o -d means non-verbose output (for cron jobs))\n";
+			echo "	-A				List all accepted torrents (required option -d)\n";
+			echo "	-R				List all rejected torrents (required option -d)\n";
+			echo "	-h 				This help\n";
+			echo "\n";
+			echo " SETTINGS:\n";
+			echo "\t RSS LINK\t: ".$this->SETTINGS['rss_link']."\n";
+			echo "\t WATCH DIR\t: ".$this->SETTINGS['watch_dir']."\n";
+			echo "-------------------------------------------------------------------\n";
+			echo "\n";
+			exit();
+		}
+		
+		
+		$count=1;
+		foreach($this->XML->channel->item as $item)
+		{
+
+			self::outputLog("checking item: $item->title");
+			
+			if (in_array($item->category, (array)$this->SETTINGS['categories']))
+			{
+				
+				for($i=0; $i<count($this->SETTINGS['torrents']); $i++)
+				{
+					// Category Episodes
+					if($item->category == "Episodes")
+					{
+						if(preg_match("/(^[a-zA-Z0-9 ]+) ([0-9]{2}) ([0-9]{2}) ([a-zA-Z0-9 ]+) (.*?) (x264-[a-zA-Z0-9]+)/i", $item->title, $nodes))
+						{
+							if(in_array($nodes[1], (array)$this->SETTINGS['torrents'][$i][0]))
+							{
+								if(in_array($nodes[5], (array)$this->SETTINGS['torrents'][$i][2]))
+								{
+									if(in_array($nodes[6], (array)$this->SETTINGS['torrents'][$i][1]))
+									{
+										if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['accepted_tor']))
+										{
+											array_push($this->SETTINGS['accepted_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+											$output = shell_exec("wget --quiet -N -P ".$this->SETTINGS['watch_dir']." ".$this->SETTINGS['watch_dir']." $item->link");
+											self::outputLog("\tACCEPTED\t".self::getCategory($item->category));
+										}
+									}
+								}
+							} else {
+								if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['rejected_tor']))
+								{
+									array_push($this->SETTINGS['rejected_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+									self::outputLog("\tREJECTED\t".self::getCategory($item->category)."NO TARGET FOUND.");
+								}
+							}
+						}
+						elseif(preg_match("/(^[a-zA-Z0-9 ]+) ([0-9]{2}) ([0-9]{2}) (.*?) (x264-[a-zA-Z0-9]+)/i", $item->title, $nodes))
+						{
+							if(in_array($nodes[1], (array)$this->SETTINGS['torrents'][$i][0]))
+							{
+								if(in_array($nodes[4], (array)$this->SETTINGS['torrents'][$i][2]))
+								{
+									if(in_array($nodes[4], (array)$this->SETTINGS['torrents'][$i][1]))
+									{
+										if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['accepted_tor']))
+										{
+											array_push($this->SETTINGS['accepted_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+											$output = shell_exec("wget --quiet -N -P ".$this->SETTINGS['watch_dir']." ".$this->SETTINGS['watch_dir']." $item->link");
+											self::outputLog("\tACCEPTED\t".self::getCategory($item->category));
+										}
+									}
+								}
+							} else {
+								if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['rejected_tor']))
+								{
+									array_push($this->SETTINGS['rejected_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+									self::outputLog("\tREJECTED\t".self::getCategory($item->category)."NO TARGET FOUND.");
+								}
+							}
+						}
+						elseif(preg_match("/(^[a-zA-Z0-9 ]+) (S[0-9]{2}E[0-9]{2}) (.*?) (x264-[a-zA-Z0-9]+)/i", $item->title, $nodes))
+						{
+							if(in_array($nodes[1], (array)$this->SETTINGS['torrents'][$i][0]))
+							{
+								if(in_array($nodes[3], (array)$this->SETTINGS['torrents'][$i][2]))
+								{
+									if(in_array($nodes[4], (array)$this->SETTINGS['torrents'][$i][1]))
+									{
+										if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['accepted_tor']))
+										{
+											array_push($this->SETTINGS['accepted_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+											$output = shell_exec("wget --quiet -N -P ".$this->SETTINGS['watch_dir']." ".$this->SETTINGS['watch_dir']." $item->link");
+											self::outputLog("\tACCEPTED\t".self::getCategory($item->category));
+										}
+									}
+								}
+							} else {
+								if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['rejected_tor']))
+								{
+									array_push($this->SETTINGS['rejected_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+									self::outputLog("\tREJECTED\t".self::getCategory($item->category)."NO TARGET FOUND.");
+								}
+							}
+						}
+						elseif(preg_match("/(^[a-zA-Z0-9 ]+) (S[0-9]{2}E[0-9]{2}) ([a-zA-Z0-9 ]+) (.*?) (x264-[a-zA-Z0-9]+)/i", $item->title, $nodes))
+						{
+							if(in_array($nodes[1], (array)$this->SETTINGS['torrents'][$i][0]))
+							{
+								if(in_array($nodes[4], (array)$this->SETTINGS['torrents'][$i][2]))
+								{
+									if(in_array($nodes[6], (array)$this->SETTINGS['torrents'][$i][1]))
+									{
+										if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['accepted_tor']))
+										{
+											array_push($this->SETTINGS['accepted_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+											$output = shell_exec("wget --quiet -N -P ".$this->SETTINGS['watch_dir']." ".$this->SETTINGS['watch_dir']." $item->link");
+											self::outputLog("\tACCEPTED\t".self::getCategory($item->category));
+										}
+									}
+								}
+							} else {
+								if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['rejected_tor']))
+								{
+									array_push($this->SETTINGS['rejected_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+									self::outputLog("\tREJECTED\t".self::getCategory($item->category)."NO TARGET FOUND.");
+								}
+							}
+						}
+						elseif(preg_match("/(^[a-zA-Z0-9 ]+) (S[0-9]{2}E[0-9]{2}E[0-9]{2}) (.*?) (x264-[a-zA-Z0-9]+)/i", $item->title, $nodes))
+						{
+							if(in_array($nodes[1], (array)$this->SETTINGS['torrents'][$i][0]))
+							{
+								if(in_array($nodes[3], (array)$this->SETTINGS['torrents'][$i][2]))
+								{
+									if(in_array($nodes[5], (array)$this->SETTINGS['torrents'][$i][1]))
+									{
+										if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['accepted_tor']))
+										{
+											array_push($this->SETTINGS['accepted_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+											$output = shell_exec("wget --quiet -N -P ".$this->SETTINGS['watch_dir']." ".$this->SETTINGS['watch_dir']." $item->link");
+											self::outputLog("\tACCEPTED\t".self::getCategory($item->category));
+										}
+									}
+								}
+							} else {
+								if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['rejected_tor']))
+								{
+									array_push($this->SETTINGS['rejected_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+									self::outputLog("\tREJECTED\t".self::getCategory($item->category)."NO TARGET FOUND.");
+								}
+							}
+						} else {
+							if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['rejected_tor']))
+							{
+								array_push($this->SETTINGS['rejected_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+								self::outputLog("\tREJECTED\t".self::getCategory($item->category)."NO PATTERN FOUND.");
+							}
+						}
+					}
+					
+					// Category Episodes HD
+					if($item->category == "Episodes HD")
+					{
+						if(preg_match("/(^[a-zA-Z0-9 ]+) ([0-9]{2}) ([0-9]{2}) ([a-zA-Z0-9 ]+) ([0-9]{3,4}p) (.*?) (x264-[a-zA-Z0-9]+)/i", $item->title, $nodes))
+						{
+							if(in_array($nodes[1], (array)$this->SETTINGS['torrents'][$i][0]))
+							{
+								if(in_array($nodes[5], (array)$this->SETTINGS['torrents'][$i][2]))
+								{
+									if(in_array($nodes[7], (array)$this->SETTINGS['torrents'][$i][1]))
+									{
+										if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['accepted_tor']))
+										{
+											array_push($this->SETTINGS['accepted_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+											$output = shell_exec("wget --quiet -N -P ".$this->SETTINGS['watch_dir']." ".$this->SETTINGS['watch_dir']." $item->link");
+											self::outputLog("\tACCEPTED\t".self::getCategory($item->category));
+										}
+									}
+								}
+							} else {
+								if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['rejected_tor']))
+								{
+									array_push($this->SETTINGS['rejected_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+									self::outputLog("\tREJECTED\t".self::getCategory($item->category)."NO TARGET FOUND.");
+								}
+							}
+						}
+						elseif(preg_match("/(^[a-zA-Z0-9 ]+) ([0-9]{2}) ([0-9]{2}) ([0-9]{3,4}p) (.*?) (x264-[a-zA-Z0-9]+)/i", $item->title, $nodes))
+						{
+							if(in_array($nodes[1], (array)$this->SETTINGS['torrents'][$i][0]))
+							{
+								if(in_array($nodes[4], (array)$this->SETTINGS['torrents'][$i][2]))
+								{
+									if(in_array($nodes[6], (array)$this->SETTINGS['torrents'][$i][1]))
+									{
+										if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['accepted_tor']))
+										{
+											array_push($this->SETTINGS['accepted_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+											$output = shell_exec("wget --quiet -N -P ".$this->SETTINGS['watch_dir']." ".$this->SETTINGS['watch_dir']." $item->link");
+											self::outputLog("\tACCEPTED\t".self::getCategory($item->category));
+										}
+									}
+								}
+							} else {
+								if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['rejected_tor']))
+								{
+									array_push($this->SETTINGS['rejected_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+									self::outputLog("\tREJECTED\t".self::getCategory($item->category)."NO TARGET FOUND.");
+								}
+							}
+						}
+						elseif(preg_match("/(^[a-zA-Z0-9 ]+) (S[0-9]{2}E[0-9]{2}) ([0-9]{3,4}p) (.*?) (x264-[a-zA-Z0-9]+)/i", $item->title, $nodes))
+						{
+							if(in_array($nodes[1], (array)$this->SETTINGS['torrents'][$i][0]))
+							{
+								if(in_array($nodes[3], (array)$this->SETTINGS['torrents'][$i][2]))
+								{
+									if(in_array($nodes[5], (array)$this->SETTINGS['torrents'][$i][1]))
+									{
+										if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['accepted_tor']))
+										{
+											array_push($this->SETTINGS['accepted_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+											$output = shell_exec("wget --quiet -N -P ".$this->SETTINGS['watch_dir']." ".$this->SETTINGS['watch_dir']." $item->link");
+											self::outputLog("\tACCEPTED\t".self::getCategory($item->category));
+										}
+									}
+								}
+							} else {
+								if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['rejected_tor']))
+								{
+									array_push($this->SETTINGS['rejected_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+									self::outputLog("\tREJECTED\t".self::getCategory($item->category)."NO TARGET FOUND.");
+								}
+							}
+						}
+						elseif(preg_match("/(^[a-zA-Z0-9 ]+) (S[0-9]{2}E[0-9]{2}) ([a-zA-Z0-9 ]+) ([0-9]{3,4}p) (.*?) (x264-[a-zA-Z0-9]+)/i", $item->title, $nodes))
+						{
+							if(in_array($nodes[1], (array)$this->SETTINGS['torrents'][$i][0]))
+							{
+								if(in_array($nodes[4], (array)$this->SETTINGS['torrents'][$i][2]))
+								{
+									if(in_array($nodes[7], (array)$this->SETTINGS['torrents'][$i][1]))
+									{
+										if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['accepted_tor']))
+										{
+											array_push($this->SETTINGS['accepted_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+											$output = shell_exec("wget --quiet -N -P ".$this->SETTINGS['watch_dir']." ".$this->SETTINGS['watch_dir']." $item->link");
+											self::outputLog("\tACCEPTED\t".self::getCategory($item->category));
+										}
+									}
+								}
+							} else {
+								if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['rejected_tor']))
+								{
+									array_push($this->SETTINGS['rejected_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+									self::outputLog("\tREJECTED\t".self::getCategory($item->category)."NO TARGET FOUND.");
+								}
+							}
+						}
+						elseif(preg_match("/(^[a-zA-Z0-9 ]+) (S[0-9]{2}E[0-9]{2}E[0-9]{2}) ([0-9]{3,4}p) (.*?) (x264-[a-zA-Z0-9]+)/i", $item->title, $nodes))
+						{
+							if(in_array($nodes[1], (array)$this->SETTINGS['torrents'][$i][0]))
+							{
+								if(in_array($nodes[3], (array)$this->SETTINGS['torrents'][$i][2]))
+								{
+									if(in_array($nodes[6], (array)$this->SETTINGS['torrents'][$i][1]))
+									{
+										if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['accepted_tor']))
+										{
+											array_push($this->SETTINGS['accepted_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+											$output = shell_exec("wget --quiet -N -P ".$this->SETTINGS['watch_dir']." ".$this->SETTINGS['watch_dir']." $item->link");
+											self::outputLog("\tACCEPTED\t".self::getCategory($item->category));
+										}
+									}
+								}
+							} else {
+								if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['rejected_tor']))
+								{
+									array_push($this->SETTINGS['rejected_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+									self::outputLog("\tREJECTED\t".self::getCategory($item->category)."NO TARGET FOUND.");
+								}
+							}
+						} else {
+							if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['rejected_tor']))
+							{
+								array_push($this->SETTINGS['rejected_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+								self::outputLog("\tREJECTED\t".self::getCategory($item->category)."NO PATTERN FOUND.");
+							}
+						}
+					}
+					
+					// Category HD
+					if($item->category == "HD")
+					{
+						if(preg_match("/(^[a-zA-Z0-9 ]+) ([0-9]{3,4}p) (.*?) (x264-[a-zA-Z0-9]+)/i", $item->title, $nodes))
+						{
+							if(in_array($nodes[1], (array)$this->SETTINGS['torrents'][$i][0]))
+							{
+								if(in_array($nodes[2], (array)$this->SETTINGS['torrents'][$i][2]))
+								{
+									if(in_array($nodes[4], (array)$this->SETTINGS['torrents'][$i][1]))
+									{
+										if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['accepted_tor']))
+										{
+											array_push($this->SETTINGS['accepted_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+											$output = shell_exec("wget --quiet -N -P ".$this->SETTINGS['watch_dir']." ".$this->SETTINGS['watch_dir']." $item->link");
+										}
+									}
+								}
+							} else {
+								if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['rejected_tor']))
+								{
+									array_push($this->SETTINGS['rejected_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+									self::outputLog("\tREJECTED\t".self::getCategory($item->category)."NO TARGET FOUND.");
+								}
+							}
+						}
+						else {
+							if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['rejected_tor']))
+							{
+								array_push($this->SETTINGS['rejected_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+								self::outputLog("\tREJECTED\t".self::getCategory($item->category)."NO PATTERN FOUND.");
+							}
+						}
+					}
+				}
+			} else {
+				if(!in_array("($count) ".self::getCategory($item->category)." $item->title", $this->SETTINGS['rejected_tor']))
+				{
+					array_push($this->SETTINGS['rejected_tor'], "($count) ".self::getCategory($item->category)." $item->title");
+					self::outputLog("\tREJECTED\t".self::getCategory($item->category)."NO CATEGORY FOUND.");
+				}
+			}
+			echo "\n";
+			$count++;
+		}
+		
+		if(isset($this->OPTIONS['d']))
+		{
+			echo "\n";
+			echo "-------------------------------------------------------------------\n\n";
+			echo "Total targets: ".count($this->SETTINGS['torrents'])."\n\n";
+			
+			echo "Total accepted torrents: ".count($this->SETTINGS['accepted_tor'])."\n\n";
+			if(isset($this->OPTIONS['A']))
+			{
+				for($i=0; $i<count($this->SETTINGS['accepted_tor']); $i++)
+				{
+					echo $this->SETTINGS['accepted_tor'][$i]."\n";
+				}
+				echo "-------------------------------------------------------------------\n";
+			}
+			
+			echo "Total rejected torrents: ".(count($this->SETTINGS['rejected_tor'])-count($this->SETTINGS['accepted_tor']))."\n\n";
+			if(isset($this->OPTIONS['R']))
+			{
+				for($i=0; $i<count($this->SETTINGS['rejected_tor']); $i++)
+				{
+					if(!in_array($this->SETTINGS['rejected_tor'][$i], $this->SETTINGS['accepted_tor']))
+						echo $this->SETTINGS['rejected_tor'][$i]."\n";
+				}
+			}
+			echo "-------------------------------------------------------------------\n";
+		}
+	}
+	
+	function getCategory($category)
+	{
+		switch($category)
+		{
+			case "Episodes": return "Episodes\t\t"; break;
+			case "Episodes HD": return "Episodes HD\t"; break;
+			case "HD": return "HD\t\t\t"; break;
+			case "PC-ISO": return "PC-ISO\t\t"; break;
+			case "PC": return "PC\t\t\t"; break;
+			case "DVDRip/DVDScreener": return "DVDRip/DVDScreener"; break;
+			case "BDRip": return "BDRip\t\t"; break;
+			default: return "$category\t"; break;
+		}
+	}
+	
+	function outputLog($log)
+	{
+		date_default_timezone_set($this->SETTINGS['timezone']);
+		
+		if(isset($this->OPTIONS['d']))
+			echo date("[m/d/Y H:i:s] ").$log."\n";
+	}
+}
+
+$TL = new TL();
+
+?>
