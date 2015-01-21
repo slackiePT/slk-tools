@@ -34,6 +34,10 @@ class TL {
 						array("Scorpion", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
 						array("Supernatural", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
 						array("The Blacklist", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
+						array("Arrow", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
+						array("The Vampire Diaries", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
+						array("Greys Anatomy", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
+						array("Once Upon a Time", array("X264-DIMENSION", "x264-LOL"), array("720p", "HDTV")),
 						
 						array("Marvels Agent Carter", array("x264-KILLERS"), array("720p", "HDTV")),
 						array("Family Guy", array("x264-KILLERS"), array("720p", "HDTV")),
@@ -43,6 +47,7 @@ class TL {
 						array("Game of Thrones", array("x264-KILLERS"), array("720p", "HDTV")),
 						array("Homeland", array("x264-KILLERS"), array("720p", "HDTV")),
 						array("The Walking Dead", array("x264-KILLERS"), array("720p", "HDTV")),
+						array("How I Met Your Mother", array("x264-KILLERS"), array("720p", "HDTV")),
 					),
 			"accepted_tor" => array(),
 			"rejected_tor" => array()
