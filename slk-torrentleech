@@ -407,7 +407,7 @@ class TL {
 				{
 					echo $this->SETTINGS['accepted_tor'][$i]."\n";
 				}
-				echo "-------------------------------------------------------------------\n";
+				echo "\n";
 			}
 			
 			echo "Total rejected torrents: ".(count($this->SETTINGS['rejected_tor'])-count($this->SETTINGS['accepted_tor']))."\n\n";
@@ -418,6 +418,7 @@ class TL {
 					if(!in_array($this->SETTINGS['rejected_tor'][$i], $this->SETTINGS['accepted_tor']))
 						echo $this->SETTINGS['rejected_tor'][$i]."\n";
 				}
+				echo "\n";
 			}
 			echo "-------------------------------------------------------------------\n";
 		}
@@ -443,7 +444,10 @@ class TL {
 		date_default_timezone_set($this->SETTINGS['timezone']);
 		
 		if(isset($this->OPTIONS['d']))
-			echo date("[m/d/Y H:i:s] ").$log."\n";
+		{
+			if(!isset($this->OPTIONS['A']) && !isset($this->OPTIONS['R']))
+				echo date("[m/d/Y H:i:s] ").$log."\n";
+		}
 	}
 }
 
