@@ -18,7 +18,7 @@ class TL {
 	public $OPTIONS;
 	public $SETTINGS = array(
 			"revision"	=> "v0.10 - last update 2015/01/21",
-			"rss_link"	=> "http://rss.torrentleech.org/fdb9bf907f162abdfe89",
+			"rss_link"	=> "http://rss.torrentleech.org/<HASH>",
 			"watch_dir"	=> "/home/slackie/transmission/new",
 			"timezone"	=> "Europe/Lisbon",
 			"categories" 	=> array("Episodes", "Episodes HD", "HD"),
